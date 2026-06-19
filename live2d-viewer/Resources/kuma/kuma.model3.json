@@ -1,0 +1,25 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "kumatyan.live2Dyou.moc3",
+		"Textures": [
+			"kumatyan.live2Dyou.2048/texture_00.png"
+		],
+		"Physics": "kumatyan.live2Dyou.physics3.json",
+		"DisplayInfo": "kumatyan.live2Dyou.cdi3.json"
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": []
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"ParamMouthOpenY"
+			]
+		}
+	]
+}

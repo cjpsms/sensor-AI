@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SENSOR AI — Neko</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg:    oklch(0.16 0.012 255);
+  --bg2:   oklch(0.20 0.014 255);
+  --panel: oklch(0.23 0.016 255 / 0.72);
+  --panel2:oklch(0.27 0.018 255 / 0.6);
+  --line:  oklch(1 0 0 / 0.09);
+  --text:  oklch(0.96 0.005 255);
+  --muted: oklch(0.66 0.012 255);
+  --mint:  #5bd6c0;
+  --pink:  #f4a6c0;
+  --pink-2:#d97aa3;
+  --pink-3:#f7b9cf;
+  --amber: #ffc36b;
+  --blue:  #7fb3ff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(1200px 700px at 80% -10%, oklch(0.26 0.04 320 / 0.5), transparent 60%),
+    radial-gradient(1000px 600px at 0% 110%, oklch(0.24 0.05 200 / 0.45), transparent 60%),
+    var(--bg);
+  color:var(--text);
+  font-family:'Space Grotesk',system-ui,sans-serif;
+  overflow:hidden;
+}
+#root{height:100vh}
+.app{height:100vh;position:relative}
+
+/* ===== mode visibility ===== */
+.fs,.cmd{position:absolute;inset:0}
+
+/* ===== mode switch button ===== */
+.modeswitch{
+  position:fixed;top:18px;right:18px;z-index:50;
+  display:flex;align-items:center;gap:8px;
+  padding:9px 15px;border-radius:999px;
+  background:oklch(0.24 0.02 255 / 0.7);backdrop-filter:blur(14px);
+  border:1px solid var(--line);color:var(--text);
+  font:600 13px 'Space Grotesk';letter-spacing:.02em;cursor:pointer;
+  box-shadow:0 6px 24px oklch(0 0 0 / 0.35);
+  transition:background .2s, transform .2s;
+}
+.modeswitch:hover{background:oklch(0.30 0.03 320 / 0.7);transform:translateY(-1px)}
+.ms-ico{font-size:13px;color:var(--pink)}
+
+/* ===== Hana — Live2D mount ===== */
+.hana-mount{position:relative;display:flex;align-items:center;justify-content:center;
+  aspect-ratio:3/4;will-change:transform;animation:float 5s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(0,-1.6%,0)}}
+.hana-glow{position:absolute;inset:8% 6% -2% 6%;border-radius:50%;
+  background:radial-gradient(closest-side, oklch(0.7 0.12 350 / 0.32), transparent 72%);filter:blur(10px)}
+.hana-slot{position:relative;height:100%;aspect-ratio:3/4;border-radius:22px;
+  border:1.5px solid oklch(1 0 0 / 0.10);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  overflow:hidden;transition:border-color .3s, box-shadow .3s;
+  transform:translateZ(0);isolation:isolate}
+.hana-slot.speaking{border-color:var(--pink-2)}
+/* glow by AI state */
+.hana-slot.state-idle{box-shadow:0 0 30px oklch(0.55 0.18 250 / 0.4)}
+.hana-slot.state-listening{border-color:oklch(0.7 0.2 145 / 0.7);box-shadow:0 0 42px oklch(0.7 0.2 145 / 0.5)}
+.hana-slot.state-thinking{border-color:oklch(0.85 0.18 85 / 0.7);box-shadow:0 0 42px oklch(0.85 0.18 85 / 0.5)}
+.hana-slot iframe{display:block}
+.hana-mini{width:40px;height:40px;border-radius:50%;position:relative;overflow:hidden;flex:none;
+  background:radial-gradient(circle at 50% 35%, oklch(0.5 0.1 340 / 0.6), oklch(0.26 0.02 320 / 0.7));
+  border:1px solid oklch(1 0 0 / 0.12)}
+.hana-mini-ghost{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);
+  width:30px;height:30px;border-radius:50%;background:var(--pink-3);opacity:.4}
+
+/* ===== FULLSCREEN ===== */
+.fs{display:flex;align-items:center;justify-content:center}
+.fs-stage{position:relative;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  height:100%;padding-bottom:240px;user-select:none}
+.fs-stage::after{content:'🎙️ แตะเพื่อเปิดเสียง';position:absolute;bottom:256px;left:50%;transform:translateX(-50%);
+  font:500 11px 'Space Grotesk';color:oklch(1 0 0 / 0.25);letter-spacing:.04em;pointer-events:none;white-space:nowrap}
+.fs-overlay{
+  position:absolute;left:50%;bottom:16px;transform:translateX(-50%);
+  width:min(720px,94vw);padding:10px;border-radius:20px;
+  background:oklch(0.18 0.015 255 / 0.82);backdrop-filter:blur(18px);
+  border:1px solid var(--line);box-shadow:0 20px 60px oklch(0 0 0 / 0.5)}
+.fs-status{position:fixed;bottom:20px;left:22px;z-index:20}
+
+/* ===== COMMANDER ===== */
+.cmd{display:grid;grid-template-columns:1fr 360px;height:100%}
+.cmd-left{display:flex;flex-direction:column;padding:18px 20px;gap:14px;min-width:0;overflow:hidden}
+.cmd-top{display:flex;align-items:center;justify-content:space-between}
+.brand{font:700 22px 'Space Grotesk';letter-spacing:.04em;display:flex;align-items:center;gap:9px}
+.brand-mark{color:var(--pink);font-size:18px}
+.brand-dim{color:var(--mint)}
+.cmd-charts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.cmd-bottom{flex:1;display:flex;gap:14px;min-height:0}
+.cmd-flow{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:14px 16px 6px;display:flex;flex-direction:column;min-height:0;backdrop-filter:blur(12px)}
+
+/* calendar */
+.cal{width:262px;flex:none;background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:14px 16px;display:flex;flex-direction:column;min-height:0;backdrop-filter:blur(12px)}
+.cal-nav{display:flex;align-items:center;gap:8px}
+.cal-nav button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;
+  line-height:1;padding:0 4px;border-radius:6px;transition:color .2s,background .2s}
+.cal-nav button:hover{color:var(--text);background:oklch(1 0 0 / 0.08)}
+.cal-title{font:700 11px 'Space Mono';letter-spacing:.04em;color:var(--text);min-width:118px;text-align:center}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal-dow{margin-top:12px}
+.cal-dh{font:700 10px 'Space Mono';color:var(--muted);text-align:center;padding:2px 0}
+.cal-dh.we{color:var(--pink-2,#f0a)}
+.cal-body{margin-top:4px;flex:1;align-content:start}
+.cal-cell{aspect-ratio:1;display:flex;align-items:center;justify-content:center;
+  font:500 12px 'Space Grotesk';color:var(--text);border-radius:8px;position:relative}
+.cal-cell.empty{color:transparent}
+.cal-cell.today{background:var(--blue);color:#06121f;font-weight:700}
+.cal-cell.sched::after{content:"";position:absolute;bottom:3px;left:50%;transform:translateX(-50%);
+  width:4px;height:4px;border-radius:50%;background:var(--amber)}
+.cal-cell.today.sched::after{background:#06121f}
+.cal-foot{margin-top:10px;font:500 11px 'Space Grotesk';color:var(--muted);
+  border-top:1px solid var(--line);padding-top:8px}
+.panel-label{font:700 11px 'Space Mono';letter-spacing:.18em;color:var(--muted);
+  display:flex;justify-content:space-between;align-items:center}
+.flow-sum{color:var(--text);font-weight:400;letter-spacing:.04em;font-size:11px;opacity:.8}
+.energy-svg{flex:1;width:100%;min-height:0;margin-top:4px}
+
+/* energy nodes */
+.enode-bg{fill:oklch(0.26 0.016 255 / 0.7);stroke:var(--line);stroke-width:1.5;transition:stroke .3s}
+.enode-emoji{font-size:24px}
+.enode-label{font:700 10px 'Space Mono';letter-spacing:.12em;fill:var(--muted)}
+.enode-watt{font:700 11px 'Space Grotesk';fill:var(--muted);transition:fill .3s}
+.enode.on .enode-watt{fill:var(--text)}
+.wire-bg{fill:none;stroke:oklch(1 0 0 / 0.07);stroke-width:3}
+.wire-flow{fill:none;stroke-width:3;stroke-dasharray:7 11;stroke-linecap:round;opacity:0;transition:opacity .4s}
+.wire-flow.active{opacity:1;animation:flow 1s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-36}}
+
+/* ===== charts ===== */
+.chart{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:11px 13px 4px;backdrop-filter:blur(12px);display:flex;flex-direction:column}
+.chart-head{display:flex;align-items:baseline;justify-content:space-between}
+.chart-title{font:600 12px 'Space Grotesk';color:var(--muted);letter-spacing:.02em}
+.chart-val{font:700 20px 'Space Grotesk'}
+.chart-unit{font-size:11px;margin-left:2px;opacity:.7}
+.chart-canvas{width:100%;height:86px;margin-top:2px}
+.fs-overlay .chart-canvas{height:200px}
+.fs-overlay .chart{padding:16px 20px 10px}
+.fs-overlay .chart-val{font-size:28px}
+.fs-overlay .chart-title{font-size:14px}
+
+/* ===== chat ===== */
+.cmd-right{background:oklch(0.18 0.014 255 / 0.6);border-left:1px solid var(--line);
+  backdrop-filter:blur(16px);min-width:0;overflow:hidden}
+.chat{display:flex;flex-direction:column;height:100%}
+.chat-head{display:flex;align-items:center;gap:11px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.chat-ava{width:40px;height:40px;border-radius:50%;overflow:hidden;flex:none;
+  background:oklch(0.3 0.04 340 / 0.5);display:flex;align-items:center;justify-content:center}
+.chat-name{font:600 15px 'Space Grotesk'}
+.chat-id{display:flex;flex-direction:column;gap:3px}
+.chat-devices-pin{padding:10px 12px 0;flex:none}
+.chat-scroll{flex:1;overflow-y:auto;padding:12px 16px 16px;display:flex;flex-direction:column;gap:11px}
+.chat-scroll::-webkit-scrollbar{width:6px}
+.chat-scroll::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+.msg{display:flex}
+.msg.user{justify-content:flex-end}
+.bubble{max-width:84%;padding:10px 14px;border-radius:15px;font:400 14px/1.45 'Space Grotesk'}
+.msg.ai .bubble{background:var(--panel2);border:1px solid var(--line);border-bottom-left-radius:4px}
+.msg.user .bubble{background:linear-gradient(135deg,var(--pink-2),oklch(0.6 0.13 320));
+  color:oklch(0.99 0.01 340);border-bottom-right-radius:4px}
+.chat-graph{border:1px solid var(--line);border-radius:14px;overflow:hidden;padding:2px;background:oklch(0.2 0.015 255 / 0.5)}
+.chat-input{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
+.chat-input input{flex:1;background:oklch(0.26 0.016 255 / 0.7);border:1px solid var(--line);
+  border-radius:11px;padding:11px 13px;color:var(--text);font:400 14px 'Space Grotesk';outline:none}
+.chat-input input:focus{border-color:var(--pink-2)}
+.chat-input input::placeholder{color:var(--muted)}
+.chat-input button{width:42px;flex:none;border:none;border-radius:11px;cursor:pointer;
+  background:linear-gradient(135deg,var(--pink),var(--pink-2));color:#fff;font-size:18px;font-weight:700}
+.chat-input button:hover{filter:brightness(1.08)}
+
+/* ===== device cards ===== */
+.devcard{background:oklch(0.2 0.015 255 / 0.5);border:1px solid var(--line);border-radius:14px;padding:12px}
+.devcard-title{font:700 10px 'Space Mono';letter-spacing:.18em;color:var(--muted);margin-bottom:10px}
+.devcard-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.devbtn{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:11px;cursor:pointer;text-align:left;
+  background:oklch(0.26 0.016 255 / 0.6);border:1px solid var(--line);color:var(--text);transition:all .2s;position:relative}
+.ac-sched-badge{position:absolute;left:10px;bottom:-9px;font:600 9px 'Space Mono';color:#0b0f17;
+  background:var(--amber, #f5b942);padding:2px 6px;border-radius:999px;white-space:nowrap;line-height:1.3}
+.devbtn.on{border-color:var(--mint);background:oklch(0.3 0.05 175 / 0.3)}
+.devbtn-icon{font-size:18px;flex:none}
+.devbtn-meta{display:flex;flex-direction:column;min-width:0;flex:1}
+.devbtn-name{font:600 12px 'Space Grotesk';white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.devbtn-state{font:400 10px 'Space Mono';color:var(--muted)}
+.devbtn.on .devbtn-state{color:var(--mint)}
+.devbtn-sw{width:28px;height:16px;border-radius:999px;background:oklch(0.4 0.01 255);flex:none;position:relative;transition:background .2s}
+.devbtn-sw.on{background:var(--mint)}
+.devbtn-sw .knob{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .2s}
+.devbtn-sw.on .knob{left:14px}
+
+/* ===== status dot ===== */
+.statusdot{display:inline-flex;align-items:center;gap:7px;
+  font:600 12px 'Space Grotesk';color:var(--muted);
+  background:oklch(0.22 0.015 255 / 0.6);padding:5px 11px;border-radius:999px;border:1px solid var(--line)}
+.statusdot .dot{width:8px;height:8px;border-radius:50%}
+.statusdot .dot.on{background:var(--mint);box-shadow:0 0 0 0 oklch(0.82 0.13 162 / 0.6);animation:pulse 2s infinite}
+.statusdot .dot.off{background:var(--muted)}
+@keyframes pulse{70%{box-shadow:0 0 0 6px oklch(0.82 0.13 162 / 0)}100%{box-shadow:0 0 0 0 oklch(0.82 0.13 162 / 0)}}
+
+/* ===== AI state text below character ===== */
+.ai-state-text{
+  position:absolute;bottom:-30px;left:50%;transform:translateX(-50%);
+  font:600 13px 'Space Grotesk';letter-spacing:.06em;white-space:nowrap;
+  pointer-events:none;transition:color .4s;
+}
+.ai-state-text.idle{color:oklch(0.6 0.18 250)}
+.ai-state-text.listening{color:oklch(0.7 0.2 145)}
+.ai-state-text.thinking{color:oklch(0.85 0.18 85)}
+
+/* ===== Sensor HUD (fullscreen bottom-left) ===== */
+.sensor-hud{
+  position:fixed;bottom:58px;left:22px;z-index:20;
+  display:flex;flex-direction:column;gap:5px;
+}
+.shud-row{
+  display:flex;align-items:center;gap:6px;
+  font:500 12px 'Space Mono';color:var(--text);
+  background:oklch(0.22 0.015 255 / 0.65);backdrop-filter:blur(10px);
+  padding:4px 11px;border-radius:9px;border:1px solid var(--line);
+  white-space:nowrap;
+}
+.shud-val{font-weight:700}
+
+/* ===== Credits (fullscreen bottom-right) ===== */
+.credit-badge{
+  position:fixed;bottom:20px;right:22px;z-index:20;
+  display:flex;flex-direction:column;align-items:flex-end;gap:2px;
+  font:400 11px 'Space Mono';
+  color:oklch(1 0 0 / 0.22);letter-spacing:.03em;pointer-events:none;
+}
+
+@media (max-width:900px){
+  .cmd{grid-template-columns:1fr}
+  .cmd-right{display:none}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<script type="text/babel" src="viz.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+<script type="text/babel" src="main.jsx"></script>
+
+<!-- Live2D postMessage helpers (vanilla JS, no React) -->
+<script>
+/* model switch & view correction */
+const L2D_VIEW = [
+  { zoom:3.15, offsetY:-0.45 },   // 🐱 แมว
+  { zoom:2.45, offsetY: 0.0  },   // 😈 เขาแดง
+  { zoom:2.65, offsetY:-0.7  },   // 🐻 หมี
+];
+let _l2dModel = 0, _viewTimer = null;
+
+function _l2dPost(msg) {
+  const f = document.getElementById('live2dFrame');
+  if (f?.contentWindow) f.contentWindow.postMessage(msg, '*');
+}
+window._l2dPost = _l2dPost;
+
+function _l2dSendView(idx) {
+  clearInterval(_viewTimer);
+  const v = L2D_VIEW[idx], n = { c: 0 };
+  _viewTimer = setInterval(() => {
+    _l2dPost({ zoom: v.zoom, offsetY: v.offsetY });
+    if (++n.c >= 10) clearInterval(_viewTimer);
+  }, 300);
+}
+
+window.addEventListener('load', () => _l2dSendView(0));
+document.addEventListener('click', e => {
+  if (e.target.id === 'live2dFrame') return;
+  // re-trigger view on iframe load (catches Live2D init finishing)
+});
+// watch for iframe to appear (React mounts it after load)
+const _obs = new MutationObserver(() => {
+  const f = document.getElementById('live2dFrame');
+  if (f) {
+    f.addEventListener('load', () => _l2dSendView(_l2dModel));
+    _obs.disconnect();
+  }
+});
+_obs.observe(document.body, { childList:true, subtree:true });
+
+/* mouth sync via Web Audio API */
+let _audioCtx, _analyser, _analyserData, _mouthRaf, _mouthSrc, _mouthTarget = 0;
+
+function _connectMouthSync(audioEl) {
+  if (!_audioCtx) {
+    _audioCtx   = new AudioContext();
+    _analyser   = _audioCtx.createAnalyser();
+    _analyser.fftSize = 512;
+    _analyser.smoothingTimeConstant = 0.0;
+    _analyser.connect(_audioCtx.destination);
+    _analyserData = new Float32Array(_analyser.fftSize);
+  }
+  if (_mouthSrc) { try { _mouthSrc.disconnect(); } catch {} }
+  try {
+    _mouthSrc = _audioCtx.createMediaElementSource(audioEl);
+    _mouthSrc.connect(_analyser);
+  } catch { _mouthSrc = null; }
+
+  const frame = () => document.getElementById('live2dFrame');
+
+  function startTick() {
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    cancelAnimationFrame(_mouthRaf);
+    function tick() {
+      _analyser.getFloatTimeDomainData(_analyserData);
+      let sum = 0;
+      for (const v of _analyserData) sum += v*v;
+      const mouth = Math.min(Math.sqrt(sum/_analyserData.length) * 5, 1);
+      _mouthTarget = _mouthTarget*0.7 + mouth*0.3;
+      frame()?.contentWindow?.postMessage({ mouth: _mouthTarget }, '*');
+      _mouthRaf = requestAnimationFrame(tick);
+    }
+    tick();
+  }
+  function stopTick() {
+    cancelAnimationFrame(_mouthRaf);
+    _mouthTarget = 0;
+    frame()?.contentWindow?.postMessage({ mouth: 0 }, '*');
+  }
+
+  audioEl.addEventListener('play',  startTick);
+  audioEl.addEventListener('pause', stopTick);
+  audioEl.addEventListener('ended', stopTick);
+  startTick();
+}
+window._connectMouthSync = _connectMouthSync;
+</script>
+</body>
+</html>
