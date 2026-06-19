@@ -2,7 +2,7 @@
 
 > Smart building AI assistant — Claude Haiku chatbot + Edge TTS + Live2D anime character (Hana, 3 models: cat/red-horn/bear) + live Pico W sensor/device dashboard over WiFi.
 
-![Project Banner](assets/banner.png)
+<img src="assets/hana.png" width="150" align="right" alt="Hana"/>
 
 ---
 
