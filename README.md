@@ -1,62 +1,89 @@
-# sensor-ai
+# Sensor AI
 
-> Smart building AI assistant — Claude Haiku chatbot + Edge TTS + Live2D anime character (Hana, 3 models: cat/red-horn/bear) + live Pico W sensor/device dashboard over WiFi.
+A smart home voice assistant backend with Claude integration. Combines speech recognition, intent classification, and device control (AC, lights, sensors) via a Raspberry Pi Pico W.
 
-<img src="assets/hana.png" width="150" align="right" alt="Hana"/>
-
----
-
-## Features
-
-### 🖥️ Two UI Modes
-Toggle between modes from the top-right corner:
-
-| Mode | Description |
-|---|---|
-| **COMPANION** | Fullscreen Live2D, voice-only / always-listen. Ask about temp/humidity/CO₂ and Hana calls `show_graph`, rendering a chart in chat. |
-| **COMMANDER** | Text-only, device control toggles (LED / AC / door / solar), energy-flow SVG diagram (solar+city → home → devices), advanced AC schedule panel. |
-
-### 🤖 AI Tools
-| Tool | Description |
-|---|---|
-| `control_device` | Controls LED / AC / door / solar via Pico W |
-| `show_graph` | Plots metric (temp / humidity / CO₂), range: `now` or `allday` |
-| `set_ac_schedule` / `cancel_ac_schedule` | Schedule or cancel AC automation |
-| `set_calendar_reminder` / `cancel_calendar_reminder` | One-time or weekly spoken reminders; AI auto-converts Thai Buddhist-era dates |
-
-### 📡 Pico W Bridge
-- Pico W connects over WiFi, POSTs sensor data to `/api/pico/sensor`
-- Polls `/api/pico/commands` every 2 s
-- Browser reads `/api/pico/state` and POSTs device toggles to `/api/pico/command`
-- Server tracks online/offline status (30 s timeout) and device states
-
-### 🌡️ Sensors
-| Sensor | Function |
-|---|---|
-| DHT22 | Temperature & humidity |
-| MQ2 | Analog gas sensor (rough air-quality proxy) |
-| INA219 | I2C voltage / current / power — solar & battery monitoring |
-
-### 💡 Devices
-- LED relay
-- AC relay
-- Solar relay
-- Servo-driven door lock (PWM)
-
----
-
-## Setup
+## Quick Start
 
 ```bash
-# Install Edge TTS (no virtualenv/distrobox needed)
-pip install --user edge-tts
-
-# Run the server
 node server.js
 ```
 
-Server listens on port **24693**.
+Runs on `http://localhost:24693`
 
----
+**Prerequisites:**
+- Claude CLI authenticated (`claude login`)
+- `edge-tts` installed (`pip install edge-tts`)
+- `distrobox` with Ubuntu container (for faster-whisper STT)
 
-## Project Layout
+## Architecture
+
+### Backend (server.js)
+HTTP server with APIs for:
+- **Chat** (`/api/chat`) — proxies messages to Claude
+- **STT** (`/api/stt`) — transcribes audio (webm) via faster-whisper
+- **TTS** (`/api/tts`) — synthesizes speech via edge-tts
+- **Intent classification** (`/api/classify`) — two-layer system:
+  1. Rule-based: detects wake word "Neko" / "เนโกะ"
+  2. Claude Haiku: classifies ambiguous cases
+- **AC control** (`/api/ac`) — manual/auto/schedule modes
+- **Calendar** (`/api/calendar`) — one-time and weekly reminders
+- **Pico W bridge** (`/api/pico/*`) — sensor data & device commands
+
+### Frontend
+React components (`main.jsx`, `app.jsx`, `viz.jsx`) with:
+- Live2D animated character (via Cubism SDK)
+- Real-time sensor graphs
+- Chat interface
+- Device controls
+
+### Hardware Bridge
+Pico W mocks in `server.js` for now:
+- Sensors: temperature, humidity, CO2
+- Devices: AC, LED, door lock, solar panel
+- Polling endpoint for commands; POST for sensor updates
+
+## File Structure
+
+```
+server.js              Main HTTP server
+main.jsx              React entry point
+app.jsx               Chat & device UI
+viz.jsx               Sensor graphs
+index.html            Static HTML
+stt.py                STT wrapper (distrobox)
+live2d/               Live2D model assets
+pico/                 Pico W firmware (placeholder)
+```
+
+## Environment
+
+Uses `~/.claude/.credentials.json` for Claude token (populated by `claude login`).
+
+## Running
+
+```bash
+# Start server on port 24693
+node server.js
+
+# Open browser to http://localhost:24693
+```
+
+## Intent Classification
+
+Wake word triggers immediate response. Otherwise, queries like "what's the temperature?" or "turn on AC" are sent to Claude Haiku for classification. Ambient speech is ignored.
+
+## AC Control Modes
+
+- **Manual**: user toggles on/off
+- **Auto**: responds to temperature thresholds (26°C on, 24°C off) or CO2 > 900 ppm
+- **Schedule**: turns on/off at a future time
+
+## Reminders
+
+Create one-time reminders by datetime or recurring weekly at a specific day/time. Fired reminders are queued for TTS announcement.
+
+## Notes
+
+- All API responses include `Access-Control-Allow-Origin: *` for CORS
+- Pico W online status checked every 30 seconds; sensor history limited to 120 readings (~20 min)
+- Thai language support throughout (error messages, logging, UI)
