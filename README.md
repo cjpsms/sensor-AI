@@ -2,6 +2,8 @@
 
 A smart home voice assistant backend with Claude integration. Combines speech recognition, intent classification, and device control (AC, lights, sensors) via a Raspberry Pi Pico W.
 
+<img src="screenshot.png" width="200" alt="Sensor AI Assistant"/>
+
 ## Quick Start
 
 ```bash
