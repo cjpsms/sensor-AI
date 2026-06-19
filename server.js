@@ -283,6 +283,88 @@ function handleAC(method, bodyStr, res) {
   reply({ ...acState });
 }
 
+// ── Calendar reminders (one-time + weekly recurring) ──────────────────────────
+const WEEKDAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+const calendarState = {
+  reminders: [],   // { id, message, type:'once'|'weekly', triggerAt, weekday, hour, minute }
+  fired:     [],   // messages due for the client to announce (drained on poll)
+};
+
+function nextWeeklyTrigger(weekday, hour, minute, fromMs = Date.now()) {
+  const target = new Date(fromMs);
+  target.setSeconds(0, 0);
+  target.setHours(hour, minute, 0, 0);
+  let diffDays = (weekday - target.getDay() + 7) % 7;
+  if (diffDays === 0 && target.getTime() <= fromMs) diffDays = 7;
+  target.setDate(target.getDate() + diffDays);
+  return target.getTime();
+}
+
+function addReminder({ message, type, datetime, weekday, time }) {
+  const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+
+  if (type === 'once') {
+    const triggerAt = new Date(datetime).getTime();
+    if (isNaN(triggerAt)) return { error: 'invalid datetime' };
+    calendarState.reminders.push({ id, message, type: 'once', triggerAt });
+    return { id, triggerAt };
+  }
+
+  if (type === 'weekly') {
+    const wd = WEEKDAYS.indexOf(String(weekday).toLowerCase());
+    if (wd === -1) return { error: 'invalid weekday' };
+    const [hour, minute] = String(time).split(':').map(n => parseInt(n, 10));
+    if (isNaN(hour) || isNaN(minute)) return { error: 'invalid time' };
+    const triggerAt = nextWeeklyTrigger(wd, hour, minute);
+    calendarState.reminders.push({ id, message, type: 'weekly', weekday: wd, hour, minute, triggerAt });
+    return { id, triggerAt };
+  }
+
+  return { error: 'invalid type' };
+}
+
+// Reminder tick (every 10 s)
+setInterval(() => {
+  const now = Date.now();
+  calendarState.reminders = calendarState.reminders.filter(r => {
+    if (now < r.triggerAt) return true;
+    calendarState.fired.push(r.message);
+    if (r.type === 'weekly') {
+      r.triggerAt = nextWeeklyTrigger(r.weekday, r.hour, r.minute, now + 1000);
+      return true;   // keep recurring reminder, rescheduled for next week
+    }
+    return false;     // one-time reminder consumed
+  });
+}, 10_000);
+
+function handleCalendar(method, bodyStr, res) {
+  const reply = (obj) => {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(obj));
+  };
+
+  if (method === 'GET') {
+    const fired = calendarState.fired.splice(0);   // drain queue
+    reply({ reminders: calendarState.reminders, fired });
+    return;
+  }
+
+  let body;
+  try { body = JSON.parse(bodyStr); } catch { body = {}; }
+
+  if (body.cancel) {
+    const before = calendarState.reminders.length;
+    calendarState.reminders = body.cancel === 'all'
+      ? []
+      : calendarState.reminders.filter(r => r.id !== body.cancel && !r.message.includes(body.cancel));
+    reply({ removed: before - calendarState.reminders.length, reminders: calendarState.reminders });
+    return;
+  }
+
+  const result = addReminder(body);
+  reply({ ...result, reminders: calendarState.reminders });
+}
+
 // ── Pico W bridge ─────────────────────────────────────────────────────────────
 const picoState = {
   sensor:   { temp: null, humidity: null, co2: null, updatedAt: null },
@@ -442,6 +524,16 @@ const server = http.createServer((req, res) => {
       let body = '';
       req.on('data', c => (body += c));
       req.on('end',  ()  => handleAC('POST', body, res));
+      return;
+    }
+  }
+
+  if (req.url === '/api/calendar') {
+    if (req.method === 'GET') { handleCalendar('GET', '', res); return; }
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', c => (body += c));
+      req.on('end',  ()  => handleCalendar('POST', body, res));
       return;
     }
   }

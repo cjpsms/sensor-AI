@@ -91,6 +91,30 @@ const TOOLS = [
     description: 'ยกเลิกการตั้งเวลาแอร์ที่ตั้งไว้',
     input_schema: { type:'object', properties:{} },
   },
+  {
+    name: 'set_calendar_reminder',
+    description: 'ตั้งเตือนให้ AI พูดข้อความที่กำหนดเมื่อถึงเวลา ใช้ type=once สำหรับนัดครั้งเดียว (เช่น "21:00 19/6/69" ต้องแปลง พ.ศ.->ค.ศ. ก่อน: ค.ศ. = พ.ศ. - 543) หรือ type=weekly สำหรับเตือนซ้ำทุกสัปดาห์วันเดิม (เช่น "ทุกวันจันทร์ทักทาย")',
+    input_schema: {
+      type:'object',
+      properties: {
+        message:  { type:'string', description:'ข้อความที่ให้ AI พูดเมื่อถึงเวลา' },
+        type:     { type:'string', enum:['once','weekly'] },
+        datetime: { type:'string', description:'สำหรับ type=once: ISO 8601 เช่น 2026-06-19T21:00:00 (ค.ศ. เท่านั้น แปลงจาก พ.ศ. ก่อนเสมอ)' },
+        weekday:  { type:'string', enum:['sunday','monday','tuesday','wednesday','thursday','friday','saturday'], description:'สำหรับ type=weekly' },
+        time:     { type:'string', description:'เวลาแบบ HH:MM 24 ชม. สำหรับ type=weekly' },
+      },
+      required:['message','type'],
+    },
+  },
+  {
+    name: 'cancel_calendar_reminder',
+    description: 'ยกเลิกการตั้งเตือนปฏิทินที่ตั้งไว้ ระบุคำในข้อความเตือนเพื่อยกเลิกอันนั้น หรือ "all" เพื่อยกเลิกทั้งหมด',
+    input_schema: {
+      type:'object',
+      properties: { match: { type:'string', description:'คำในข้อความเตือนที่ต้องการยกเลิก หรือ "all"' } },
+      required:['match'],
+    },
+  },
 ];
 
 const SEED = n => Array.from({ length:30 }, (_,i) => n + Math.sin(i/3)*(n*0.04));
@@ -196,6 +220,22 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
+  /* ── Poll calendar reminders every 10s — announces any that just fired ── */
+  uE(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/calendar');
+        const st = await r.json();
+        for (const msg of st.fired || []) {
+          if (!_busy) say(msg);
+        }
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 10_000);
+    return () => clearInterval(id);
+  }, []);
+
   /* ── say: add AI bubble + TTS in fullscreen ── */
   async function say(text, metric, range) {
     _lastAi = text;
@@ -282,6 +322,33 @@ function App() {
       } catch {}
       return 'ยกเลิกการตั้งเวลาแอร์แล้วค่ะ';
     }
+    if (name === 'set_calendar_reminder') {
+      try {
+        const r = await fetch('/api/calendar', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            message: inp.message, type: inp.type,
+            datetime: inp.datetime, weekday: inp.weekday, time: inp.time,
+          }),
+        });
+        const st = await r.json();
+        if (st.error) return `ตั้งเตือนไม่สำเร็จค่ะ: ${st.error}`;
+      } catch {}
+      return inp.type === 'weekly'
+        ? `ตั้งเตือนทุกวัน${inp.weekday}เวลา ${inp.time} แล้วค่ะ`
+        : `ตั้งเตือนแล้วค่ะ`;
+    }
+    if (name === 'cancel_calendar_reminder') {
+      try {
+        const r = await fetch('/api/calendar', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ cancel: inp.match }),
+        });
+        const st = await r.json();
+        return st.removed > 0 ? `ยกเลิกการเตือนแล้วค่ะ (${st.removed} รายการ)` : 'ไม่พบการเตือนที่ตรงกันค่ะ';
+      } catch {}
+      return 'ยกเลิกไม่สำเร็จค่ะ';
+    }
     return 'ไม่รู้จักเครื่องมือนี้ค่ะ';
   }
 
@@ -304,11 +371,14 @@ function App() {
       ? `ตั้งเวลาไว้: ${acSchedule.action==='on'?'เปิด':'ปิด'}แอร์ในอีก ${Math.max(0, Math.round((acSchedule.triggerAt - Date.now())/60000))} นาที`
       : 'ไม่มีการตั้งเวลาแอร์';
     return `คุณคือ Neko — AI Assistant ประจำ SmartLab ชั้น 3
-เครื่องมือ: control_device (led/ac/door/solar) + show_graph (metric:temp/humidity/co2, range:now/allday) + set_ac_schedule (action:on/off, minutes) + cancel_ac_schedule
+เครื่องมือ: control_device (led/ac/door/solar) + show_graph (metric:temp/humidity/co2, range:now/allday) + set_ac_schedule (action:on/off, minutes) + cancel_ac_schedule + set_calendar_reminder (type:once/weekly) + cancel_calendar_reminder
 บุคลิก: สุภาพ ใจดี ตอบภาษาไทย แนวอนิเมะ ลงท้าย "ค่ะ"/"นะคะ" ตอบสั้น 1-3 ประโยคเท่านั้น
 เวลาปัจจุบัน: ${nowStr} (เขตเวลาไทย) — ใช้เวลานี้เมื่อผู้ใช้ถามเวลา/วันที่ หรือคำนวณตารางเวลา
 กฎ: เมื่อถามเกี่ยวกับค่า temp/humidity/co2 ให้เรียก show_graph เสมอ
 กฎ: เมื่อผู้ใช้พูดถึงเปิด/ปิดแอร์แบบมีเวลา ("อีก 10 นาที", "อีกครึ่งชั่วโมง") ให้เรียก set_ac_schedule แทน control_device
+กฎ: เมื่อผู้ใช้ขอให้เตือน/พูดอะไรในเวลาที่กำหนด ("ตอน 21:00 พูดว่า...", "ทุกวันจันทร์ทักทาย") ให้เรียก set_calendar_reminder
+  - ครั้งเดียว (type=once) ต้องแปลงวันที่เป็น ISO 8601 ค.ศ. เท่านั้น — ถ้าผู้ใช้ให้ปี พ.ศ. (เช่น 69 = 2569) ให้แปลง ค.ศ. = พ.ศ. - 543 ก่อนส่ง (2569-543=2026)
+  - ทุกสัปดาห์ (type=weekly) ใช้ weekday + time (HH:MM 24 ชม.)
 กฎ: CO2>1000=ไม่ดี, >1200=อันตราย, Temp>28=ร้อนเกิน
 ---สถานะอุปกรณ์ปัจจุบัน---
 ${devState}
