@@ -97,7 +97,8 @@ body{
 .brand{font:700 22px 'Space Grotesk';letter-spacing:.04em;display:flex;align-items:center;gap:9px}
 .brand-mark{color:var(--pink);font-size:18px}
 .brand-dim{color:var(--mint)}
-.cmd-charts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.cmd-charts{display:flex;flex-wrap:wrap;gap:12px}
+.cmd-charts .chart{flex:1 1 calc(33.333% - 8px);min-width:160px}
 .cmd-bottom{flex:1;display:flex;gap:14px;min-height:0}
 .cmd-flow{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:16px;
   padding:14px 16px 6px;display:flex;flex-direction:column;min-height:0;backdrop-filter:blur(12px)}
