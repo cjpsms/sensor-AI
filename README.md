@@ -89,3 +89,9 @@ Create one-time reminders by datetime or recurring weekly at a specific day/time
 - All API responses include `Access-Control-Allow-Origin: *` for CORS
 - Pico W online status checked every 30 seconds; sensor history limited to 120 readings (~20 min)
 - Thai language support throughout (error messages, logging, UI)
+
+## Credits
+
+- Live2D model (`live2d/free1.*`) by **comte19**
+- Live2D Cubism SDK by Live2D Inc.
+- Claude (Anthropic) — chat, intent classification (Claude Haiku)
