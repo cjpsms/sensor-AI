@@ -26,6 +26,12 @@ SERVO_CLOSED_ANGLE = 0   # degrees when "closed"
 # MQ2 VCC needs 5V (VBUS pin 40); AOUT is 0-3.3V safe for the Pico's ADC.
 PIN_MQ2      = 26   # Pico ADC0 (GP26)
 
+# Photoresistor (light level, analog out) — outdoor light intensity.
+PIN_LIGHT    = 27   # Pico ADC1 (GP27)
+
+# Sound sensor (analog out) — indoor noise level.
+PIN_SOUND    = 28   # Pico ADC2 (GP28)
+
 # INA219 voltage/current sensor (I2C) — solar panel/battery monitoring.
 PIN_I2C_SDA       = 8    # I2C0 SDA (GP8)
 PIN_I2C_SCL       = 9    # I2C0 SCL (GP9)

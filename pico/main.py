@@ -9,7 +9,7 @@ from boot import wlan, connect_wifi
 from ina219 import INA219
 from config import (
     SERVER_IP, SERVER_PORT, SENSOR_ID,
-    PIN_LED, PIN_AC, PIN_DOOR, PIN_SOLAR, PIN_DHT, PIN_MQ2,
+    PIN_LED, PIN_AC, PIN_DOOR, PIN_SOLAR, PIN_DHT, PIN_MQ2, PIN_LIGHT, PIN_SOUND,
     PIN_I2C_SDA, PIN_I2C_SCL, INA219_ADDR, INA219_SHUNT_OHMS, INA219_MAX_AMPS,
     SERVO_OPEN_ANGLE, SERVO_CLOSED_ANGLE,
     SENSOR_INTERVAL_MS, COMMAND_INTERVAL_MS,
@@ -27,6 +27,10 @@ dht_sensor = dht.DHT22(Pin(PIN_DHT))
 
 # MQ2 gas sensor on ADC0 (GP26) — analog output, 0-65535 raw reading
 mq2 = ADC(Pin(PIN_MQ2))
+
+# Photoresistor on ADC1 (GP27) and sound sensor on ADC2 (GP28) — analog, 0-65535 raw
+light_sensor = ADC(Pin(PIN_LIGHT))
+sound_sensor = ADC(Pin(PIN_SOUND))
 
 # INA219 voltage/current sensor on I2C0 (GP8=SDA, GP9=SCL) — solar/battery monitoring
 i2c = I2C(0, sda=Pin(PIN_I2C_SDA), scl=Pin(PIN_I2C_SCL))
@@ -102,6 +106,8 @@ def read_sensors():
         'temp': temp,
         'humidity': hum,
         'co2': read_co2(),
+        'light': light_sensor.read_u16(),
+        'sound': sound_sensor.read_u16(),
     }
     data.update(read_power())
     return data

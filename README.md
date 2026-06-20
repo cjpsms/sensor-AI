@@ -40,7 +40,7 @@ React components (`main.jsx`, `app.jsx`, `viz.jsx`) with:
 
 ### Hardware Bridge
 Pico W mocks in `server.js` for now:
-- Sensors: temperature, humidity, CO2
+- Sensors: temperature, humidity, CO2, light (photoresistor, GP27/ADC1), sound (GP28/ADC2)
 - Devices: AC, LED, door lock, solar panel
 - Polling endpoint for commands; POST for sensor updates
 

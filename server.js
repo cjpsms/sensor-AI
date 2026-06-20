@@ -367,7 +367,7 @@ function handleCalendar(method, bodyStr, res) {
 
 // ── Pico W bridge ─────────────────────────────────────────────────────────────
 const picoState = {
-  sensor:   { temp: null, humidity: null, co2: null, updatedAt: null },
+  sensor:   { temp: null, humidity: null, co2: null, light: null, sound: null, updatedAt: null },
   devices:  { led: false, ac: false, door: false, solar: false },  // last-known on/off
   commands: [],          // queue of pending commands for Pico to execute
   online:   false,       // true once Pico has talked to us recently
@@ -377,7 +377,7 @@ const picoState = {
 // Rolling history for the "now" graph — last 120 readings (~20 min at 10s)
 const picoHistory = [];
 function pushHistory(s) {
-  picoHistory.push({ t: Date.now(), temp: s.temp, humidity: s.humidity, co2: s.co2 });
+  picoHistory.push({ t: Date.now(), temp: s.temp, humidity: s.humidity, co2: s.co2, light: s.light, sound: s.sound });
   if (picoHistory.length > 120) picoHistory.shift();
 }
 
@@ -399,6 +399,8 @@ function handlePico(req, res, body) {
       if (d.temp     !== undefined) picoState.sensor.temp     = d.temp;
       if (d.humidity !== undefined) picoState.sensor.humidity = d.humidity;
       if (d.co2      !== undefined) picoState.sensor.co2      = d.co2;
+      if (d.light    !== undefined) picoState.sensor.light    = d.light;
+      if (d.sound    !== undefined) picoState.sensor.sound    = d.sound;
       picoState.sensor.updatedAt = new Date().toISOString();
       pushHistory(picoState.sensor);
       markOnline();

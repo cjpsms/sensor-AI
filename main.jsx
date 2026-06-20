@@ -64,11 +64,11 @@ const TOOLS = [
   },
   {
     name: 'show_graph',
-    description: 'แสดงกราฟค่าเซ็นเซอร์ให้ผู้ใช้เห็น ใช้เสมอเมื่อถามถึง temp/humidity/co2',
+    description: 'แสดงกราฟค่าเซ็นเซอร์ให้ผู้ใช้เห็น ใช้เสมอเมื่อถามถึง temp/humidity/co2/light/sound',
     input_schema: {
       type:'object',
       properties: {
-        metric: { type:'string', enum:['temp','humidity','co2'] },
+        metric: { type:'string', enum:['temp','humidity','co2','light','sound'] },
         range:  { type:'string', enum:['now','allday'] },
       },
       required:['metric','range'],
@@ -138,6 +138,8 @@ function App() {
     temp:     { title:'อุณหภูมิ',  unit:'°C',  color:'#ff9d6b', data: SEED(24.5) },
     humidity: { title:'ความชื้น', unit:'%',   color:'#5bd6c0', data: SEED(52)   },
     co2:      { title:'CO₂',      unit:'ppm', color:'#9d8bff', data: SEED(620)  },
+    light:    { title:'ความเข้มแสง', unit:'',  color:'#ffd76b', data: SEED(20000) },
+    sound:    { title:'ความดัง',     unit:'',  color:'#6bb6ff', data: SEED(8000)  },
   });
   const [messages, setMessages] = uS([
     { role:'ai', text:'สวัสดีค่ะ หนูคือ Neko 🌸 AI Assistant ประจำ SmartLab ชั้น 3 ค่ะ' },
@@ -168,12 +170,14 @@ function App() {
         setOnline(!!st.online);
         if (st.devices) setDevices(st.devices);
         const s = st.sensor || {};
-        if (s.temp != null || s.humidity != null || s.co2 != null) {
+        if (s.temp != null || s.humidity != null || s.co2 != null || s.light != null || s.sound != null) {
           setSensors(prev => {
             const n = { ...prev };
             if (s.temp     != null) n.temp     = { ...prev.temp,     data:[...prev.temp.data.slice(1),     s.temp]     };
             if (s.humidity != null) n.humidity = { ...prev.humidity, data:[...prev.humidity.data.slice(1), s.humidity] };
             if (s.co2      != null) n.co2      = { ...prev.co2,      data:[...prev.co2.data.slice(1),      s.co2]      };
+            if (s.light    != null) n.light    = { ...prev.light,    data:[...prev.light.data.slice(1),    s.light]    };
+            if (s.sound    != null) n.sound    = { ...prev.sound,    data:[...prev.sound.data.slice(1),    s.sound]    };
             return n;
           });
         }
@@ -366,15 +370,15 @@ function App() {
       `โซลาร์=${devices.solar?'ทำงาน':'หยุด'}`,
     ].join(', ');
     const s = sensorsRef.current;
-    const liveState = `อุณหภูมิ=${s.temp.data.at(-1).toFixed(1)}°C, ความชื้น=${s.humidity.data.at(-1).toFixed(0)}%, CO2=${s.co2.data.at(-1).toFixed(0)}ppm`;
+    const liveState = `อุณหภูมิ=${s.temp.data.at(-1).toFixed(1)}°C, ความชื้น=${s.humidity.data.at(-1).toFixed(0)}%, CO2=${s.co2.data.at(-1).toFixed(0)}ppm, แสง=${s.light.data.at(-1).toFixed(0)}, เสียง=${s.sound.data.at(-1).toFixed(0)}`;
     const schedState = acSchedule
       ? `ตั้งเวลาไว้: ${acSchedule.action==='on'?'เปิด':'ปิด'}แอร์ในอีก ${Math.max(0, Math.round((acSchedule.triggerAt - Date.now())/60000))} นาที`
       : 'ไม่มีการตั้งเวลาแอร์';
     return `คุณคือ Neko — AI Assistant ประจำ SmartLab ชั้น 3
-เครื่องมือ: control_device (led/ac/door/solar) + show_graph (metric:temp/humidity/co2, range:now/allday) + set_ac_schedule (action:on/off, minutes) + cancel_ac_schedule + set_calendar_reminder (type:once/weekly) + cancel_calendar_reminder
+เครื่องมือ: control_device (led/ac/door/solar) + show_graph (metric:temp/humidity/co2/light/sound, range:now/allday) + set_ac_schedule (action:on/off, minutes) + cancel_ac_schedule + set_calendar_reminder (type:once/weekly) + cancel_calendar_reminder
 บุคลิก: สุภาพ ใจดี ตอบภาษาไทย แนวอนิเมะ ลงท้าย "ค่ะ"/"นะคะ" ตอบสั้น 1-3 ประโยคเท่านั้น
 เวลาปัจจุบัน: ${nowStr} (เขตเวลาไทย) — ใช้เวลานี้เมื่อผู้ใช้ถามเวลา/วันที่ หรือคำนวณตารางเวลา
-กฎ: เมื่อถามเกี่ยวกับค่า temp/humidity/co2 ให้เรียก show_graph เสมอ
+กฎ: เมื่อถามเกี่ยวกับค่า temp/humidity/co2/light/sound ให้เรียก show_graph เสมอ
 กฎ: เมื่อผู้ใช้พูดถึงเปิด/ปิดแอร์แบบมีเวลา ("อีก 10 นาที", "อีกครึ่งชั่วโมง") ให้เรียก set_ac_schedule แทน control_device
 กฎ: เมื่อผู้ใช้ขอให้เตือน/พูดอะไรในเวลาที่กำหนด ("ตอน 21:00 พูดว่า...", "ทุกวันจันทร์ทักทาย") ให้เรียก set_calendar_reminder
   - ครั้งเดียว (type=once) ต้องแปลงวันที่เป็น ISO 8601 ค.ศ. เท่านั้น — ถ้าผู้ใช้ให้ปี พ.ศ. (เช่น 69 = 2569) ให้แปลง ค.ศ. = พ.ศ. - 543 ก่อนส่ง (2569-543=2026)
@@ -542,6 +546,8 @@ ${rows}`;
             <div className="shud-row">🌡 <span className="shud-val">{sensors.temp.data.at(-1).toFixed(1)}°C</span></div>
             <div className="shud-row">💧 <span className="shud-val">{sensors.humidity.data.at(-1).toFixed(0)}%</span></div>
             <div className="shud-row">🌿 <span className="shud-val">{sensors.co2.data.at(-1).toFixed(0)} ppm</span></div>
+            <div className="shud-row">☀️ <span className="shud-val">{sensors.light.data.at(-1).toFixed(0)}</span></div>
+            <div className="shud-row">🔊 <span className="shud-val">{sensors.sound.data.at(-1).toFixed(0)}</span></div>
             <div className="shud-row">⚡ <span className="shud-val">{gen} W</span></div>
           </div>
 
