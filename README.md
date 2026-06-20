@@ -13,9 +13,28 @@ node server.js
 Runs on `http://localhost:24693`
 
 **Prerequisites:**
-- Claude CLI authenticated (`claude login`)
+- Claude CLI authenticated (`claude login`) — required for CLI mode (default)
 - `edge-tts` installed (`pip install edge-tts`)
 - `distrobox` with Ubuntu container (for faster-whisper STT)
+
+## Claude Auth Modes
+
+Two interchangeable ways to authenticate to Claude — set via the `CLAUDE_MODE` env var:
+
+| Mode | `CLAUDE_MODE` | Requires | Notes |
+|---|---|---|---|
+| **CLI** (default) | `cli` or unset | `claude login` | Reuses the Claude CLI's own OAuth token — no separate API billing |
+| **API** | `api` | `ANTHROPIC_API_KEY` env var | Standalone Anthropic API key, billed separately |
+
+```bash
+# CLI mode (default)
+node server.js
+
+# API mode
+CLAUDE_MODE=api ANTHROPIC_API_KEY=sk-ant-... node server.js
+```
+
+Check the active mode and auth status: `GET /api/status` → `{ ok, mode, error }`.
 
 ## Architecture
 
@@ -59,7 +78,7 @@ pico/                 Pico W firmware (placeholder)
 
 ## Environment
 
-Uses `~/.claude/.credentials.json` for Claude token (populated by `claude login`).
+CLI mode (default) uses `~/.claude/.credentials.json` for the Claude token (populated by `claude login`). API mode uses the `ANTHROPIC_API_KEY` env var instead — see [Claude Auth Modes](#claude-auth-modes).
 
 ## Running
 

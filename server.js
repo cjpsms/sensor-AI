@@ -10,8 +10,12 @@ const PORT  = 24693;
 const CREDS = path.join(process.env.HOME, '.claude', '.credentials.json');
 const DIR   = __dirname;
 
-// ── Claude CLI token ──────────────────────────────────────────────────────
-function getToken() {
+// ── Claude auth — 2 modes ──────────────────────────────────────────────────
+// CLAUDE_MODE=cli (default) → reuse the Claude CLI's own OAuth token (`claude login`), no separate billing.
+// CLAUDE_MODE=api           → use a standalone Anthropic API key (ANTHROPIC_API_KEY), billed on its own.
+const CLAUDE_MODE = (process.env.CLAUDE_MODE || 'cli').toLowerCase();
+
+function getCliToken() {
   try {
     const c = JSON.parse(fs.readFileSync(CREDS, 'utf8'));
     const tok = c?.claudeAiOauth?.accessToken;
@@ -24,9 +28,21 @@ function getToken() {
   }
 }
 
+// Returns Anthropic auth headers for the active mode, or { error }.
+function getAuthHeaders() {
+  if (CLAUDE_MODE === 'api') {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key) return { error: 'ไม่เจอ ANTHROPIC_API_KEY — ตั้งค่า env var ก่อนนะคะ (CLAUDE_MODE=api)' };
+    return { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } };
+  }
+  const { token, error } = getCliToken();
+  if (error) return { error };
+  return { headers: { 'Authorization': `Bearer ${token}`, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'oauth-2025-04-20' } };
+}
+
 // ── Proxy → api.anthropic.com/v1/messages ────────────────────────────────
 function proxyAnthropic(bodyStr, res) {
-  const { token, error } = getToken();
+  const { headers: authHeaders, error } = getAuthHeaders();
   if (error) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error }));
@@ -39,11 +55,9 @@ function proxyAnthropic(bodyStr, res) {
     path:     '/v1/messages',
     method:   'POST',
     headers: {
-      'Content-Type':    'application/json',
-      'Content-Length':  data.length,
-      'Authorization':   `Bearer ${token}`,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta':  'oauth-2025-04-20',
+      'Content-Type':   'application/json',
+      'Content-Length': data.length,
+      ...authHeaders,
     },
   };
 
@@ -140,7 +154,7 @@ function hasWakeWord(text) {
 }
 
 function classifyViaHaiku(text, lastAiMessage, cb) {
-  const { token, error } = getToken();
+  const { headers: authHeaders, error } = getAuthHeaders();
   if (error) { cb('yes'); return; }
 
   let system = 'Answer yes or no only.\nyes=question or command clearly directed at an AI assistant. This includes ANY mention of: temperature, humidity, CO2, carbon footprint or carbon emissions, AC/air conditioner control or schedule or timer, time, or any direct question/command, OR any address/mention of the assistant by name ("Neko"/"เนโกะ" or a close mishearing of that name).\nno=anything else: talking to humans, ambient speech, statements, unclear context.\nWhen unsure about topic words or the name above, answer yes. Otherwise when unsure, answer no.';
@@ -162,11 +176,9 @@ function classifyViaHaiku(text, lastAiMessage, cb) {
     path: '/v1/messages',
     method: 'POST',
     headers: {
-      'Content-Type':      'application/json',
-      'Content-Length':    data.length,
-      'Authorization':     `Bearer ${token}`,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta':    'oauth-2025-04-20',
+      'Content-Type':   'application/json',
+      'Content-Length': data.length,
+      ...authHeaders,
     },
     timeout: 5000,
   }, apiRes => {
@@ -553,9 +565,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/api/status') {
-    const { token, error } = getToken();
+    const { headers, error } = getAuthHeaders();
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: !!token, error: error || null }));
+    res.end(JSON.stringify({ ok: !!headers, mode: CLAUDE_MODE, error: error || null }));
     return;
   }
 
@@ -563,8 +575,8 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  const { token, error } = getToken();
+  const { headers, error } = getAuthHeaders();
   console.log(`\nSensor AI  →  http://localhost:${PORT}`);
-  console.log(`Claude token: ${token ? '✓ OK' : '✗ ' + error}`);
+  console.log(`Claude mode: ${CLAUDE_MODE}  |  auth: ${headers ? '✓ OK' : '✗ ' + error}`);
   console.log('(Ctrl+C to stop)\n');
 });
