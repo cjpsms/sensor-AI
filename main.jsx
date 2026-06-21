@@ -150,6 +150,7 @@ function App() {
   const [speaking, setSpeaking] = uS(false);
   const [voice,    setVoice]    = uS('th-TH-PremwadeeNeural');
   const [acSchedule, setAcSchedule] = uS(null);  // { triggerAt, action } | null
+  const [dataMode, setDataModeState] = uS('real');  // 'real' | 'fake' — synthetic sensor data for testing
 
   /* ── Refs for callbacks that need current values without re-creating loops ── */
   const modeRef    = uR(mode);
@@ -168,6 +169,7 @@ function App() {
         const r  = await fetch('/api/pico/state');
         const st = await r.json();
         setOnline(!!st.online);
+        if (st.mode) setDataModeState(st.mode);
         if (st.devices) setDevices(st.devices);
         const s = st.sensor || {};
         if (s.temp != null || s.humidity != null || s.co2 != null || s.light != null || s.sound != null) {
@@ -357,22 +359,44 @@ function App() {
   }
 
   /* ── Claude Haiku ── */
-  function buildSysPrompt() {
+  /* Fetch sensor/device/AC-schedule state fresh right before building each
+     prompt, instead of relying on the 3-10s poll intervals — those drive the
+     UI fine but can be stale by the time the user actually asks something,
+     and a tool call (e.g. control_device) can change state mid-turn. */
+  async function fetchLiveState() {
+    try {
+      const [picoRes, acRes] = await Promise.all([
+        fetch('/api/pico/state'),
+        fetch('/api/ac'),
+      ]);
+      const pico = await picoRes.json();
+      const ac   = await acRes.json();
+      return { pico, ac };
+    } catch {
+      return { pico: null, ac: null };
+    }
+  }
+
+  async function buildSysPrompt() {
+    const { pico, ac } = await fetchLiveState();
     const TL = window.SENSOR_TIMELINE;
     const rows = TL.map(d => `${d.ts}|${d.temp}°C|${d.hum}%|${d.co2}ppm`).join('\n');
     const nowStr = new Date().toLocaleString('th-TH', {
       timeZone: 'Asia/Bangkok', dateStyle: 'full', timeStyle: 'short',
     });
+    const dev = pico?.devices || devices;
     const devState = [
-      `ไฟ LED=${devices.led?'เปิด':'ปิด'}`,
-      `แอร์=${devices.ac?'เปิด':'ปิด'}`,
-      `ประตู=${devices.door?'เปิด':'ปิด'}`,
-      `โซลาร์=${devices.solar?'ทำงาน':'หยุด'}`,
+      `ไฟ LED=${dev.led?'เปิด':'ปิด'}`,
+      `แอร์=${dev.ac?'เปิด':'ปิด'}`,
+      `ประตู=${dev.door?'เปิด':'ปิด'}`,
+      `โซลาร์=${dev.solar?'ทำงาน':'หยุด'}`,
     ].join(', ');
+    const sensor = pico?.sensor || {};
     const s = sensorsRef.current;
-    const liveState = `อุณหภูมิ=${s.temp.data.at(-1).toFixed(1)}°C, ความชื้น=${s.humidity.data.at(-1).toFixed(0)}%, CO2=${s.co2.data.at(-1).toFixed(0)}ppm, แสง=${s.light.data.at(-1).toFixed(0)}, เสียง=${s.sound.data.at(-1).toFixed(0)}`;
-    const schedState = acSchedule
-      ? `ตั้งเวลาไว้: ${acSchedule.action==='on'?'เปิด':'ปิด'}แอร์ในอีก ${Math.max(0, Math.round((acSchedule.triggerAt - Date.now())/60000))} นาที`
+    const liveState = `อุณหภูมิ=${(sensor.temp ?? s.temp.data.at(-1)).toFixed(1)}°C, ความชื้น=${(sensor.humidity ?? s.humidity.data.at(-1)).toFixed(0)}%, CO2=${(sensor.co2 ?? s.co2.data.at(-1)).toFixed(0)}ppm, แสง=${(sensor.light ?? s.light.data.at(-1)).toFixed(0)}, เสียง=${(sensor.sound ?? s.sound.data.at(-1)).toFixed(0)}`;
+    const sched = ac?.schedule ?? acSchedule;
+    const schedState = sched
+      ? `ตั้งเวลาไว้: ${sched.action==='on'?'เปิด':'ปิด'}แอร์ในอีก ${Math.max(0, Math.round((sched.triggerAt - Date.now())/60000))} นาที`
       : 'ไม่มีการตั้งเวลาแอร์';
     return `คุณคือ Neko — AI Assistant ประจำ SmartLab ชั้น 3
 เครื่องมือ: control_device (led/ac/door/solar) + show_graph (metric:temp/humidity/co2/light/sound, range:now/allday) + set_ac_schedule (action:on/off, minutes) + cancel_ac_schedule + set_calendar_reminder (type:once/weekly) + cancel_calendar_reminder
@@ -397,7 +421,7 @@ ${rows}`;
   async function callClaude(userMsg) {
     _pendingGraph = null;
     const msgs = [..._history, { role:'user', content:userMsg }];
-    const body = { model:'claude-haiku-4-5-20251001', max_tokens:512, temperature:0.5, system:buildSysPrompt(), tools:TOOLS, messages:msgs };
+    const body = { model:'claude-haiku-4-5-20251001', max_tokens:512, temperature:0.5, system: await buildSysPrompt(), tools:TOOLS, messages:msgs };
     const r1 = await fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     const d1 = await r1.json();
     if (!r1.ok) throw new Error(d1?.error?.message || `HTTP ${r1.status}`);
@@ -406,7 +430,9 @@ ${rows}`;
       const results = [];
       for (const tb of d1.content.filter(c => c.type==='tool_use'))
         results.push({ type:'tool_result', tool_use_id:tb.id, content: await runTool(tb) });
-      const body2 = { model:'claude-haiku-4-5-20251001', max_tokens:256, temperature:0.5, system:buildSysPrompt(), tools:TOOLS,
+      // Re-fetch live state for the follow-up call — a tool (e.g. control_device,
+      // set_ac_schedule) may have just changed it.
+      const body2 = { model:'claude-haiku-4-5-20251001', max_tokens:256, temperature:0.5, system: await buildSysPrompt(), tools:TOOLS,
         messages:[...msgs, { role:'assistant', content:d1.content }, { role:'user', content:results }] };
       const r2 = await fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body2) });
       const d2 = await r2.json();
@@ -454,6 +480,19 @@ ${rows}`;
       return next;
     });
   }, []);
+
+  /* ── Toggle data mode: 'real' Pico W vs 'fake' synthetic test data ── */
+  const toggleDataMode = uC(async () => {
+    const next = dataMode === 'fake' ? 'real' : 'fake';
+    try {
+      const r = await fetch('/api/mode', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ mode: next }),
+      });
+      const st = await r.json();
+      if (st.ok) setDataModeState(st.mode);
+    } catch {}
+  }, [dataMode]);
 
   /* ── Always-listen voice loop (starts on first tap in fullscreen) ── */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -553,6 +592,12 @@ ${rows}`;
 
           <div className="fs-status">
             <StatusDot online={online} label={online ? "Pico W · ออนไลน์" : "Pico W · ออฟไลน์"} />
+            <button onClick={toggleDataMode} title="สลับข้อมูลจริง/ข้อมูลทดสอบ"
+              style={{ marginLeft:8, background: dataMode==='fake' ? 'oklch(0.55 0.18 70 / 0.3)' : 'oklch(0.24 0.02 255 / 0.6)',
+                border:'1px solid var(--line)', borderRadius:999, padding:'4px 10px', color:'var(--text)',
+                cursor:'pointer', font:'500 11px Space Grotesk' }}>
+              {dataMode === 'fake' ? '🧪 Fake data' : '📡 Real data'}
+            </button>
           </div>
 
           {/* credits */}
@@ -583,6 +628,12 @@ ${rows}`;
             <header className="cmd-top">
               <div className="brand"><span className="brand-mark">◈</span> SENSOR<span className="brand-dim">AI</span></div>
               <StatusDot online={online} label={online ? "Pico W · ออนไลน์" : "Pico W · ออฟไลน์"} />
+            <button onClick={toggleDataMode} title="สลับข้อมูลจริง/ข้อมูลทดสอบ"
+              style={{ marginLeft:8, background: dataMode==='fake' ? 'oklch(0.55 0.18 70 / 0.3)' : 'oklch(0.24 0.02 255 / 0.6)',
+                border:'1px solid var(--line)', borderRadius:999, padding:'4px 10px', color:'var(--text)',
+                cursor:'pointer', font:'500 11px Space Grotesk' }}>
+              {dataMode === 'fake' ? '🧪 Fake data' : '📡 Real data'}
+            </button>
             </header>
 
             <div className="cmd-charts">

@@ -1,1 +1,4 @@
 # Clean contributors cache
+
+# Runtime state (AC schedule, reminders, data mode) — persisted, not source
+data.json
