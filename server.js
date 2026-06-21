@@ -9,6 +9,54 @@ const { execFile, spawnSync } = require('child_process');
 const PORT  = 24693;
 const CREDS = path.join(process.env.HOME, '.claude', '.credentials.json');
 const DIR   = __dirname;
+const STATE_FILE = path.join(DIR, 'data.json');
+
+// 'real' (wait for the actual Pico W) | 'fake' (synthetic generator, for
+// testing the AI/UI without hardware) — declared early so persist()/
+// loadPersisted() can reference it before its functional home further down.
+let dataMode = 'real';
+
+// ── Allowed CORS origins (this is a local-only app served from one host) ───
+const ALLOWED_ORIGINS = new Set([
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+]);
+function corsOrigin(req) {
+  const origin = req.headers.origin;
+  return origin && ALLOWED_ORIGINS.has(origin) ? origin : `http://127.0.0.1:${PORT}`;
+}
+
+// ── Request body size limits ────────────────────────────────────────────────
+const MAX_JSON_BODY  = 512 * 1024;        // 512 KB — chat/classify/ac/calendar/pico payloads
+const MAX_AUDIO_BODY = 15 * 1024 * 1024;  // 15 MB  — STT audio upload
+
+// Collects a request body up to maxBytes; sends 413 and aborts if exceeded.
+function readBody(req, res, maxBytes, onComplete) {
+  const chunks = [];
+  let size = 0;
+  let aborted = false;
+  req.on('data', chunk => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > maxBytes) {
+      aborted = true;
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'payload too large' }));
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    onComplete(Buffer.concat(chunks));
+  });
+}
+
+// Asia/Bangkok is a fixed UTC+7 offset (no DST) — compute weekly reminder
+// triggers in Bangkok wall-clock time so they fire correctly regardless of
+// what timezone the server's system clock is set to.
+const BKK_OFFSET_MS = 7 * 60 * 60 * 1000;
 
 // ── Claude auth — 2 modes ──────────────────────────────────────────────────
 // CLAUDE_MODE=cli (default) → reuse the Claude CLI's own OAuth token (`claude login`), no separate billing.
@@ -41,7 +89,7 @@ function getAuthHeaders() {
 }
 
 // ── Proxy → api.anthropic.com/v1/messages ────────────────────────────────
-function proxyAnthropic(bodyStr, res) {
+function proxyAnthropic(bodyStr, res, req) {
   const { headers: authHeaders, error } = getAuthHeaders();
   if (error) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -64,7 +112,7 @@ function proxyAnthropic(bodyStr, res) {
   const apiReq = https.request(opts, apiRes => {
     res.writeHead(apiRes.statusCode, {
       'Content-Type':                'application/json',
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': corsOrigin(req),
     });
     apiRes.pipe(res);
   });
@@ -79,7 +127,7 @@ function proxyAnthropic(bodyStr, res) {
 }
 
 // ── STT  (faster-whisper large-v3-turbo, ผ่าน distrobox ubuntu) ──────────
-function handleSTT(audioBuffer, res) {
+function handleSTT(audioBuffer, res, req) {
   const tmp = path.join(os.tmpdir(), `hana-stt-${Date.now()}.webm`);
   fs.writeFile(tmp, audioBuffer, err => {
     if (err) {
@@ -96,14 +144,24 @@ function handleSTT(audioBuffer, res) {
         res.end(JSON.stringify({ error: stderr || err.message }));
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': corsOrigin(req) });
       res.end(JSON.stringify({ text: stdout.trim() }));
     });
   });
 }
 
 // ── Edge TTS  (runs inside distrobox ubuntu) ──────────────────────────────
-function handleTTS(bodyStr, res) {
+// Resolved once at startup (not per-request) and checked executable so a
+// missing/misconfigured binary fails loudly at boot instead of silently
+// per-request, and so the path isn't re-derived from env on every call.
+const EDGE_TTS_BIN = path.join(process.env.HOME, '.local', 'bin', 'edge-tts');
+try {
+  fs.accessSync(EDGE_TTS_BIN, fs.constants.X_OK);
+} catch {
+  console.warn(`[WARN] edge-tts not found/executable at ${EDGE_TTS_BIN} — TTS requests will fail`);
+}
+
+function handleTTS(bodyStr, res, req) {
   let payload;
   try { payload = JSON.parse(bodyStr); } catch { payload = {}; }
 
@@ -117,9 +175,8 @@ function handleTTS(bodyStr, res) {
   }
 
   const tmp = path.join(os.tmpdir(), `hana-tts-${Date.now()}.mp3`);
-  const edgeTts = process.env.HOME + '/.local/bin/edge-tts';
   const args = ['--voice', voice, '--text', text, '--write-media', tmp];
-  execFile(edgeTts, args, (err) => {
+  execFile(EDGE_TTS_BIN, args, (err) => {
     if (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
@@ -135,7 +192,7 @@ function handleTTS(bodyStr, res) {
       res.writeHead(200, {
         'Content-Type':                'audio/mpeg',
         'Content-Length':              data.length,
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': corsOrigin(req),
       });
       res.end(data);
     });
@@ -196,9 +253,9 @@ function classifyViaHaiku(text, lastAiMessage, cb) {
   req.write(data); req.end();
 }
 
-function classifyIntent(text, lastAiMessage, res) {
+function classifyIntent(text, lastAiMessage, res, req) {
   const reply = (respond) => {
-    res.writeHead(200, { 'Content-Type':'application/json', 'Access-Control-Allow-Origin':'*' });
+    res.writeHead(200, { 'Content-Type':'application/json', 'Access-Control-Allow-Origin':corsOrigin(req) });
     res.end(JSON.stringify({ respond }));
   };
 
@@ -228,15 +285,27 @@ function setAC(on, reason) {
   if (acState.on === on) return;
   acState.on = on;
   acLog(`${on ? '🟢 เปิด' : '🔴 ปิด'} แอร์ — ${reason}`);
-  // ── ใส่ real hardware command ตรงนี้ ──
-  // e.g. execFile('python3', ['control_ac.py', on ? 'on' : 'off'])
+  // Real hardware command: queue it for the Pico W to execute, same path
+  // the browser's manual device toggle uses (handlePico's /api/pico/command).
+  picoState.devices.ac = on;
+  picoState.commands.push({ device: 'ac', value: on });
+  persist();
+}
+
+// Current sensor reading used by auto-mode, with a safe fallback if the
+// Pico hasn't reported anything yet (e.g. right after server start).
+function currentReading() {
+  const s = picoState.sensor;
+  return {
+    temp: s.temp ?? 26.0,
+    co2:  s.co2  ?? 600,
+  };
 }
 
 // Auto-control tick (every 30 s)
 setInterval(() => {
   if (acState.mode !== 'auto') return;
-  // ใช้ค่าล่าสุดจาก SENSOR_TIMELINE (วันที่ 10 เวลา 17:00)
-  const temp = 27.4, co2 = 892;
+  const { temp, co2 } = currentReading();
   if (!acState.on && (temp >= acState.auto.tempOn || co2 >= acState.auto.co2On))
     setAC(true,  `auto: temp ${temp}°C / CO2 ${co2}ppm`);
   else if (acState.on && temp <= acState.auto.tempOff)
@@ -249,12 +318,13 @@ setInterval(() => {
   if (Date.now() >= acState.schedule.triggerAt) {
     setAC(acState.schedule.action === 'on', `schedule ถึงเวลาแล้ว`);
     acState.schedule = null;
+    persist();
   }
 }, 5_000);
 
-function handleAC(method, bodyStr, res) {
+function handleAC(method, bodyStr, res, req) {
   const reply = (obj) => {
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': corsOrigin(req) });
     res.end(JSON.stringify(obj));
   };
 
@@ -285,13 +355,14 @@ function handleAC(method, bodyStr, res) {
 
   if (body.mode === 'auto') {
     // run once immediately
-    const temp = 27.4, co2 = 892;
+    const { temp, co2 } = currentReading();
     if (temp >= acState.auto.tempOn || co2 >= acState.auto.co2On)
       setAC(true,  `auto init: temp ${temp}°C`);
     else
       setAC(false, `auto init: ปกติ`);
   }
 
+  persist();
   reply({ ...acState });
 }
 
@@ -303,14 +374,39 @@ const calendarState = {
 };
 
 function nextWeeklyTrigger(weekday, hour, minute, fromMs = Date.now()) {
-  const target = new Date(fromMs);
-  target.setSeconds(0, 0);
-  target.setHours(hour, minute, 0, 0);
-  let diffDays = (weekday - target.getDay() + 7) % 7;
-  if (diffDays === 0 && target.getTime() <= fromMs) diffDays = 7;
-  target.setDate(target.getDate() + diffDays);
-  return target.getTime();
+  const bkkNow = fromMs + BKK_OFFSET_MS;
+  const target = new Date(bkkNow);
+  target.setUTCHours(hour, minute, 0, 0);
+  let diffDays = (weekday - target.getUTCDay() + 7) % 7;
+  if (diffDays === 0 && target.getTime() <= bkkNow) diffDays = 7;
+  target.setUTCDate(target.getUTCDate() + diffDays);
+  return target.getTime() - BKK_OFFSET_MS;
 }
+
+// ── Persistence: AC mode/schedule + calendar reminders survive restarts ────
+function persist() {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      ac: { mode: acState.mode, auto: acState.auto, schedule: acState.schedule, on: acState.on },
+      reminders: calendarState.reminders,
+      dataMode,
+    }));
+  } catch (e) {
+    console.warn('[WARN] failed to persist state:', e.message);
+  }
+}
+
+function loadPersisted() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (saved.ac) Object.assign(acState, saved.ac);
+    if (Array.isArray(saved.reminders)) calendarState.reminders = saved.reminders;
+    if (saved.dataMode === 'real' || saved.dataMode === 'fake') dataMode = saved.dataMode;
+  } catch {
+    // no saved state yet — start fresh
+  }
+}
+loadPersisted();
 
 function addReminder({ message, type, datetime, weekday, time }) {
   const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7);
@@ -338,8 +434,11 @@ function addReminder({ message, type, datetime, weekday, time }) {
 // Reminder tick (every 10 s)
 setInterval(() => {
   const now = Date.now();
+  const before = calendarState.reminders.length;
+  let fired = false;
   calendarState.reminders = calendarState.reminders.filter(r => {
     if (now < r.triggerAt) return true;
+    fired = true;
     calendarState.fired.push(r.message);
     if (r.type === 'weekly') {
       r.triggerAt = nextWeeklyTrigger(r.weekday, r.hour, r.minute, now + 1000);
@@ -347,11 +446,12 @@ setInterval(() => {
     }
     return false;     // one-time reminder consumed
   });
+  if (fired || calendarState.reminders.length !== before) persist();
 }, 10_000);
 
-function handleCalendar(method, bodyStr, res) {
+function handleCalendar(method, bodyStr, res, req) {
   const reply = (obj) => {
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': corsOrigin(req) });
     res.end(JSON.stringify(obj));
   };
 
@@ -369,11 +469,13 @@ function handleCalendar(method, bodyStr, res) {
     calendarState.reminders = body.cancel === 'all'
       ? []
       : calendarState.reminders.filter(r => r.id !== body.cancel && !r.message.includes(body.cancel));
+    persist();
     reply({ removed: before - calendarState.reminders.length, reminders: calendarState.reminders });
     return;
   }
 
   const result = addReminder(body);
+  persist();
   reply({ ...result, reminders: calendarState.reminders });
 }
 
@@ -393,9 +495,44 @@ function pushHistory(s) {
   if (picoHistory.length > 120) picoHistory.shift();
 }
 
+// ── Data mode: 'real' (wait for the actual Pico W) | 'fake' (synthetic
+// generator, for testing the AI/UI without hardware) ────────────────────────
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+let fakeReading = { temp: 25.0, humidity: 50, co2: 600, light: 15000, sound: 8000 };
+
+function stepFake() {
+  const jitter = (v, amt) => v + (Math.random() - 0.5) * amt;
+  fakeReading = {
+    temp:     clamp(jitter(fakeReading.temp, 0.4),     20,  32),
+    humidity: clamp(jitter(fakeReading.humidity, 2),   35,  70),
+    co2:      clamp(jitter(fakeReading.co2, 40),       380, 1400),
+    light:    clamp(jitter(fakeReading.light, 1500),   0,   30000),
+    sound:    clamp(jitter(fakeReading.sound, 800),    0,   20000),
+  };
+  picoState.sensor = { ...fakeReading, updatedAt: new Date().toISOString() };
+  pushHistory(picoState.sensor);
+  picoState.online   = true;
+  picoState.lastSeen = Date.now();
+}
+
+// Tick the generator every 10 s while in fake mode (same cadence as a real Pico push)
+setInterval(() => { if (dataMode === 'fake') stepFake(); }, 10_000);
+
+function setDataMode(mode) {
+  if (mode !== 'real' && mode !== 'fake') return false;
+  dataMode = mode;
+  if (mode === 'fake') stepFake();   // seed data immediately, don't wait 10s
+  persist();
+  return true;
+}
+
+// If a saved 'fake' mode was restored from disk on boot, seed a reading now
+// instead of leaving the sensor null until the first 10s tick.
+if (dataMode === 'fake') stepFake();
+
 function handlePico(req, res, body) {
   const reply = (obj) => {
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': corsOrigin(req) });
     res.end(JSON.stringify(obj));
   };
 
@@ -404,8 +541,10 @@ function handlePico(req, res, body) {
     picoState.lastSeen = Date.now();
   };
 
-  // Pico pushes sensor data
+  // Pico pushes sensor data — ignored while a fake-data test is running,
+  // so a real device left plugged in can't clobber the synthetic readings.
   if (req.method === 'POST' && req.url === '/api/pico/sensor') {
+    if (dataMode === 'fake') { reply({ ok: true, ignored: true, reason: 'fake data mode active' }); return true; }
     try {
       const d = JSON.parse(body);
       if (d.temp     !== undefined) picoState.sensor.temp     = d.temp;
@@ -449,16 +588,30 @@ function handlePico(req, res, body) {
 
   // Browser reads full state (sensor + devices + online)
   if (req.method === 'GET' && req.url === '/api/pico/state') {
-    // consider Pico offline if not seen for 30 s
-    if (picoState.lastSeen && Date.now() - picoState.lastSeen > 30_000)
+    // consider Pico offline if not seen for 30 s (skip the check in fake mode —
+    // the generator keeps lastSeen fresh on its own 10s tick)
+    if (dataMode === 'real' && picoState.lastSeen && Date.now() - picoState.lastSeen > 30_000)
       picoState.online = false;
-    reply(picoState);
+    reply({ ...picoState, mode: dataMode });
     return true;
   }
 
   // Browser reads rolling history for the "now" graph
   if (req.method === 'GET' && req.url === '/api/pico/history') {
     reply(picoHistory);
+    return true;
+  }
+
+  // Browser reads/sets the data mode ('real' | 'fake')
+  if (req.method === 'GET' && req.url === '/api/mode') {
+    reply({ mode: dataMode });
+    return true;
+  }
+  if (req.method === 'POST' && req.url === '/api/mode') {
+    let m;
+    try { m = JSON.parse(body).mode; } catch { m = null; }
+    if (!setDataMode(m)) { reply({ ok: false, error: 'mode must be "real" or "fake"' }); return true; }
+    reply({ ok: true, mode: dataMode });
     return true;
   }
 
@@ -495,68 +648,54 @@ function serveStatic(req, res) {
 
 // ── Main server ───────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin',  '*');
+  res.setHeader('Access-Control-Allow-Origin',  corsOrigin(req));
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
   if (req.method === 'POST' && req.url === '/api/chat') {
-    let body = '';
-    req.on('data', chunk => (body += chunk));
-    req.on('end',  ()    => proxyAnthropic(body, res));
+    readBody(req, res, MAX_JSON_BODY, buf => proxyAnthropic(buf.toString('utf8'), res, req));
     return;
   }
 
   if (req.method === 'POST' && req.url === '/api/stt') {
-    const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end',  ()  => handleSTT(Buffer.concat(chunks), res));
+    readBody(req, res, MAX_AUDIO_BODY, buf => handleSTT(buf, res, req));
     return;
   }
 
   if (req.method === 'POST' && req.url === '/api/tts') {
-    let body = '';
-    req.on('data', chunk => (body += chunk));
-    req.on('end',  ()    => handleTTS(body, res));
+    readBody(req, res, MAX_JSON_BODY, buf => handleTTS(buf.toString('utf8'), res, req));
     return;
   }
 
   if (req.method === 'POST' && req.url === '/api/classify') {
-    let body = '';
-    req.on('data', c => (body += c));
-    req.on('end', () => {
+    readBody(req, res, MAX_JSON_BODY, buf => {
       let text = '', lastAiMessage = '';
-      try { const p = JSON.parse(body); text = p.text || ''; lastAiMessage = p.lastAiMessage || ''; } catch {}
-      classifyIntent(text, lastAiMessage, res);
+      try { const p = JSON.parse(buf.toString('utf8')); text = p.text || ''; lastAiMessage = p.lastAiMessage || ''; } catch {}
+      classifyIntent(text, lastAiMessage, res, req);
     });
     return;
   }
 
   if (req.url === '/api/ac') {
-    if (req.method === 'GET') { handleAC('GET', '', res); return; }
+    if (req.method === 'GET') { handleAC('GET', '', res, req); return; }
     if (req.method === 'POST') {
-      let body = '';
-      req.on('data', c => (body += c));
-      req.on('end',  ()  => handleAC('POST', body, res));
+      readBody(req, res, MAX_JSON_BODY, buf => handleAC('POST', buf.toString('utf8'), res, req));
       return;
     }
   }
 
   if (req.url === '/api/calendar') {
-    if (req.method === 'GET') { handleCalendar('GET', '', res); return; }
+    if (req.method === 'GET') { handleCalendar('GET', '', res, req); return; }
     if (req.method === 'POST') {
-      let body = '';
-      req.on('data', c => (body += c));
-      req.on('end',  ()  => handleCalendar('POST', body, res));
+      readBody(req, res, MAX_JSON_BODY, buf => handleCalendar('POST', buf.toString('utf8'), res, req));
       return;
     }
   }
 
-  if (req.url.startsWith('/api/pico')) {
-    let body = '';
-    req.on('data', c => (body += c));
-    req.on('end', () => {
-      if (!handlePico(req, res, body)) {
+  if (req.url.startsWith('/api/pico') || req.url === '/api/mode') {
+    readBody(req, res, MAX_JSON_BODY, buf => {
+      if (!handlePico(req, res, buf.toString('utf8'))) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'unknown pico route' }));
       }
